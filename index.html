@@ -1,0 +1,156 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Chameleon — Player</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:linear-gradient(#0f1724,#071024);color:#fff}
+    .card{width:420px;padding:20px;border-radius:12px;background:rgba(255,255,255,0.04);box-shadow:0 6px 30px rgba(0,0,0,0.6)}
+    input,button{width:100%;padding:12px;margin-top:8px;border-radius:8px;border:0}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:12px}
+    .cell{padding:10px;border-radius:8px;background:rgba(255,255,255,0.03);text-align:center}
+    .hidden{opacity:0.6}
+  </style>
+</head>
+<body>
+  <div class="card" id="ui">
+    <div id="join">
+      <h2>Join Chameleon</h2>
+      <input id="name" placeholder="Your nickname">
+      <input id="code" placeholder="Room code">
+      <button id="joinBtn">Join</button>
+      <div id="status" style="margin-top:8px;font-size:14px"></div>
+    </div>
+
+    <div id="lobby" style="display:none">
+      <h3>Lobby — <span id="roomCode"></span></h3>
+      <div id="players"></div>
+      <div style="margin-top:10px;font-size:14px">Waiting for host to start...</div>
+    </div>
+
+    <div id="round" style="display:none">
+      <h3 id="category">Category</h3>
+      <div id="roleInfo" style="margin-top:6px"></div>
+      <div id="grid" class="grid"></div>
+      <div id="hintWrap" style="margin-top:10px;display:none">
+        <input id="hintInput" placeholder="Enter your one-word hint">
+        <button id="hintBtn">Submit Hint</button>
+      </div>
+      <div id="hintsArea" style="margin-top:10px;display:none">
+        <h4>Hints</h4>
+        <div id="hintsList"></div>
+      </div>
+      <div id="votingArea" style="margin-top:10px;display:none">
+        <h4>Vote who is the Chameleon</h4>
+        <div id="voteButtons"></div>
+      </div>
+      <div id="resultArea" style="margin-top:10px;display:none">
+        <h4 id="resultText"></h4>
+      </div>
+    </div>
+  </div>
+
+<script>
+let ws;
+let myId;
+let myRole = null;
+let players = [];
+
+function connect() {
+  ws = new WebSocket('wss://blendinserver.onrender.com');
+  ws.onopen = () => console.log('ws open');
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    handle(msg.type, msg.data);
+  };
+}
+
+function handle(type,data){
+  if(type==='connected'){ myId = data.id; }
+  if(type==='room_update'){
+    document.getElementById('lobby').style.display = 'block';
+    document.getElementById('join').style.display = 'none';
+    document.getElementById('roomCode').innerText = data.code;
+    players = data.players;
+    renderPlayers();
+  }
+  if(type==='game_start_player'){
+    document.getElementById('round').style.display='block';
+    document.getElementById('lobby').style.display='none';
+    myRole = data.role;
+    document.getElementById('category').innerText = data.category || 'Category';
+    if(data.role==='chameleon'){
+      document.getElementById('roleInfo').innerText = 'You are THE CHAMELEON — give a hint to blend in.';
+      document.getElementById('hintWrap').style.display='block';
+      renderGrid(null); // hide words
+    } else {
+      document.getElementById('roleInfo').innerText = `You see the secret at (${data.coord.r+1},${data.coord.c+1}). Give a one-word hint.`;
+      renderGrid(data.grid, data.coord);
+      document.getElementById('hintWrap').style.display='block';
+    }
+  }
+  if(type==='hint_progress'){
+    document.getElementById('status').innerText = `Hints submitted: ${data.submitted}/${data.total}`;
+  }
+  if(type==='hints_revealed'){
+    document.getElementById('hintsArea').style.display='block';
+    const list = document.getElementById('hintsList'); list.innerHTML='';
+    Object.entries(data.hints).forEach(([pid,h]) => {
+      const el = document.createElement('div'); el.innerText = h; list.appendChild(el);
+    });
+    // show voting buttons
+    document.getElementById('votingArea').style.display='block';
+    renderVoteButtons();
+  }
+  if(type==='voting_start'){
+    document.getElementById('status').innerText = 'Voting started';
+  }
+  if(type==='round_result'){
+    document.getElementById('resultArea').style.display='block';
+    const text = data.success ? 'Non-chameleons win!' : 'Chameleon wins!';
+    document.getElementById('resultText').innerText = text + ' Secret: ' + data.secretWord;
+  }
+}
+
+function renderPlayers(){
+  const el = document.getElementById('players'); el.innerHTML='';
+  players.forEach(p => { const d = document.createElement('div'); d.innerText = p.name; el.appendChild(d); });
+}
+
+function renderGrid(grid, coord){
+  const wrap = document.getElementById('grid'); wrap.innerHTML='';
+  for(let r=0;r<4;r++){
+    for(let c=0;c<4;c++){
+      const cell = document.createElement('div'); cell.className='cell';
+      if(grid){ cell.innerText = grid[r][c]; if(coord && coord.r===r && coord.c===c) cell.style.border='2px solid white'; }
+      else { cell.innerText='????'; cell.classList.add('hidden'); }
+      wrap.appendChild(cell);
+    }
+  }
+}
+
+function renderVoteButtons(){
+  const vb = document.getElementById('voteButtons'); vb.innerHTML='';
+  players.forEach(p=>{
+    const b = document.createElement('button'); b.innerText = p.name; b.onclick = ()=>{ ws.send(JSON.stringify({type:'vote',data:{targetId:p.id}})); };
+    vb.appendChild(b);
+  });
+}
+
+window.onload = ()=>{
+  connect();
+  document.getElementById('joinBtn').onclick = ()=>{
+    const name = document.getElementById('name').value || 'Anon';
+    const code = document.getElementById('code').value || '';
+    ws.send(JSON.stringify({type:'join_room',data:{code, name}}));
+  };
+  document.getElementById('hintBtn').onclick = ()=>{
+    const hint = document.getElementById('hintInput').value || '';
+    ws.send(JSON.stringify({type:'submit_hint',data:{hint}}));
+    document.getElementById('hintWrap').style.display='none';
+  };
+};
+</script>
+</body>
+</html>
